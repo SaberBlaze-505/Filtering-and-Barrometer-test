@@ -1,85 +1,128 @@
 #include <Arduino.h>
 #include <Wire.h>
 #include <MS5611.h>
-
+#include <math.h>
 MS5611 ms5611(0x77);
+const int SDA_PIN = 21;
+const int SCL_PIN = 22;
+float referencePressure = 0.0; // 0m ref
+const int CALIBRATION_SAMPLES = 100; // sample
 
-const float P0 = 1013.25;
+float kalmanEstimate = 0.0; // Estimated altitude
+float estimationError = 1.0; // error treshold
 
+float processNoise = 0.01; // Q kasar tp responsif
+float measurementNoise = 1.0; // R halus tp lambat
 
-float referenceAltitude = 0.0;
+unsigned long sampleNumber = 0; //sample debug
 
+// Previous valid raw altitude
+float previousValidAltitude = 0.0;
+// Maximum allowed change between consecutive measurements.
+const float SPIKE_THRESHOLD = 2.5;
 
-
-float pressureToAltitude(float pressure)
+float pressureToRelativeAltitude(float pressure) //rumus
 {
-    return 44330.0 * (1.0 - pow(pressure / P0, 0.1903));
+    return 44330.0 * (1.0 - pow(pressure / referencePressure, 0.1903));
 }
 
+float kalmanFilter(float measurement)
+{
+    estimationError += processNoise;
+
+    float kalmanGain = estimationError / (estimationError + measurementNoise);
+
+    kalmanEstimate += kalmanGain * (measurement - kalmanEstimate);
+
+    estimationError =
+        (1.0 - kalmanGain) *
+        estimationError;
+
+    return kalmanEstimate;
+}
 
 void setup()
 {
     Serial.begin(115200);
+
     delay(1000);
 
-    Wire.begin(21, 22);
-
-    Serial.println("Starting GY-63 / MS5611...");
-
+    Serial.println("GY-63");
+    Wire.begin(SDA_PIN, SCL_PIN);
     if (!ms5611.begin())
     {
         Serial.println("ERROR: MS5611 not detected!");
+        Serial.println("Check SDA, SCL, VCC and GND.");
 
-    while (1)
+        while (1)
         {
-        delay(1000);
+            delay(1000);
         }
     }
 
-    Serial.println("MS5611 detected!");
-    Serial.println("Calibrating zero altitude...");
-    Serial.println("Keep the sensor still!");
+    Serial.println("MS5611 detected");
+    Serial.println("sampling");
+    float pressureSum = 0.0;
 
-
-    float altitudeSum = 0.0;
-
-    for (int i = 0; i < 20; i++)
+    for (int i = 0; i < CALIBRATION_SAMPLES; i++)
     {
         ms5611.read();
+
         float pressure = ms5611.getPressure();
-        float altitude = pressureToAltitude(pressure);
-        altitudeSum += altitude;
-        delay(100);
+
+        pressureSum += pressure;
+
+        delay(50);
     }
 
-    referenceAltitude = altitudeSum / 20.0;
-    Serial.print("Reference altitude: ");
-    Serial.print(referenceAltitude, 2);
-    Serial.println(" m");
-    Serial.println();
-    Serial.println("Relative altimeter ready!");
-    Serial.println();
-}
 
+    referencePressure =
+        pressureSum / CALIBRATION_SAMPLES;
+
+
+    Serial.print("Reference 0m pressure: ");
+    Serial.print(referencePressure, 3);
+    Serial.println(" mbar");
+    Serial.println("Pressure(mbar),RawAltitude(m),KalmanAltitude(m),Status");
+}
 
 void loop()
 {
     ms5611.read();
 
-    float pressure = ms5611.getPressure();
+    float pressure =
+        ms5611.getPressure();
 
-    float absoluteAltitude =
-    pressureToAltitude(pressure);
 
-    float relativeAltitude =
-    absoluteAltitude - referenceAltitude;
+    // Convert
+    float rawAltitude =
+        pressureToRelativeAltitude(pressure);
 
-    Serial.print("Pressure: ");
-    Serial.print(pressure, 2);
-    Serial.print(" mbar | Absolute: ");
-    Serial.print(absoluteAltitude, 2);
-    Serial.print(" m | Relative: ");
-    Serial.print(relativeAltitude, 2);
-    Serial.println(" m");
-    delay(500);
+
+    float filteredAltitude = kalmanEstimate;
+
+
+    filteredAltitude =
+        kalmanFilter(rawAltitude);
+
+    previousValidAltitude =
+        rawAltitude;
+
+
+    // sample debug
+    sampleNumber++;
+    Serial.print("Sample ");
+    Serial.print(sampleNumber);
+    Serial.print(",");
+
+    //output
+    Serial.print(pressure, 3);
+    Serial.print(" mbar,");
+
+    Serial.print(rawAltitude, 3);
+    Serial.print(" m,");
+
+    Serial.print(filteredAltitude, 3);
+    Serial.print(" m,");
+    delay(200);
 }
