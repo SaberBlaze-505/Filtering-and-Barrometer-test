@@ -18,8 +18,7 @@ unsigned long sampleNumber = 0; //sample debug
 
 // Previous valid raw altitude
 float previousValidAltitude = 0.0;
-// Maximum allowed change between consecutive measurements.
-const float SPIKE_THRESHOLD = 2.5;
+
 
 float pressureToRelativeAltitude(float pressure) //rumus
 {
